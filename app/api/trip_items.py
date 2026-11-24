@@ -38,6 +38,8 @@ from app.services.item_notifications import (
 )
 from app.services.item_visibility import present_item, visible_items
 from app.services.timekeeping import to_local, to_utc
+from app.services.trip_groups import my_cluster
+from app.services.trip_matching import Stretch, match_trip
 
 router = APIRouter(prefix="/trips/{trip_id}/items", tags=["trip items"])
 
@@ -404,12 +406,54 @@ def build_trip_item(
     return item
 
 
+def _transit_trip(session: Session, trip: Trip, user: User, payload: TripItemCreate) -> Trip:
+    """The trip a new transit item belongs on, of the caller's trips in `trip`'s
+    group, matched by its times the way an imported booking is (see
+    app.services.trip_matching): so a flight landing the evening before an
+    extension, or leaving the morning after the parent, lands on the right one
+    whichever of them it was added from. `trip` when it stands alone or nothing
+    in its group fits."""
+    if payload.kind is not TripItemKind.TRANSIT or trip.group_id is None:
+        return trip
+    values = payload.model_dump()
+    legs = _build_segments(session, values.get("segments") or [_leg_from_span(values)])
+    if legs[0].starts_at is None:
+        return trip
+    stretch = Stretch(starts_at=legs[0].starts_at, ends_at=legs[-1].ends_at, transit=True)
+    return match_trip(my_cluster(session, trip, user), [stretch]) or trip
+
+
+def _for_trip(payload: TripItemCreate, source: Trip, target: Trip) -> TripItemCreate:
+    """`payload` with its participants (member rows of `source`) swapped for
+    the same people's rows on `target`; anyone not on `target` is left off.
+    An id not on `source` is kept, to be refused like any unknown member."""
+    if target is source or payload.participants is None:
+        return payload
+    email_of = {member.id: member.email for member in source.members}
+    on_target = {member.email: member.id for member in target.members}
+    participants = []
+    for entry in payload.participants:
+        email = email_of.get(entry.member_id)
+        if email is None:
+            participants.append(entry)
+        elif email in on_target:
+            participants.append(entry.model_copy(update={"member_id": on_target[email]}))
+    return payload.model_copy(update={"participants": participants})
+
+
 @router.post("", response_model=TripItemRead, status_code=status.HTTP_201_CREATED)
 def create_item(
     payload: TripItemCreate, trip: ViewableTrip, user: CurrentUser, session: SessionDep
 ) -> TripItemRead:
     """Anyone on the trip can add an item, for any of its members. With
-    `notify_members`, the others who can see it are told."""
+    `notify_members`, the others who can see it are told.
+
+    A transit item may land on another of the caller's trips in the same group
+    than the one it was posted to, when its times fit that one better (see
+    _transit_trip); its participants move with it, as the same people. The
+    response's `trip_id` says where it went."""
+    target = _transit_trip(session, trip, user, payload)
+    payload, trip = _for_trip(payload, trip, target), target
     item = build_trip_item(session, trip, user, payload)
     if payload.notify_members:
         notify_item_created(session, trip, item, user)

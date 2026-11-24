@@ -927,15 +927,14 @@ class AdminImagePage(BaseModel):
 
 class ImportResult(ReadModel):
     """The outcome of importing one receipt: `placed` (into `trip_id`,
-    `item_count` items created), `no_match`/`ambiguous` (left `extracted`; for
-    ambiguous, `candidate_trip_ids` lists the overlapping trips), or `skipped`
-    (the receipt wasn't in an importable state)."""
+    `item_count` items created), `no_match` (left `extracted`: none of the
+    owner's trips fits its dates), or `skipped` (the receipt wasn't in an
+    importable state)."""
 
     receipt: ReceivedMailRead
-    outcome: Literal["placed", "no_match", "ambiguous", "skipped"]
+    outcome: Literal["placed", "no_match", "skipped"]
     trip_id: uuid.UUID | None = None
     item_count: int = 0
-    candidate_trip_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class ImageImportResult(ReadModel):
@@ -943,10 +942,9 @@ class ImageImportResult(ReadModel):
     but `receipt` is the image's metadata rather than an email's."""
 
     receipt: ImageReceiptRead
-    outcome: Literal["placed", "no_match", "ambiguous", "skipped"]
+    outcome: Literal["placed", "no_match", "skipped"]
     trip_id: uuid.UUID | None = None
     item_count: int = 0
-    candidate_trip_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 # --- pricing & credits ---

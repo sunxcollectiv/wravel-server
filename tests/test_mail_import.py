@@ -1,7 +1,10 @@
+import uuid
+from datetime import timedelta
+
 import pytest
 from sqlalchemy import func, select
 
-from app.models import EmailReceipt, EmailReceiptStatus, Place
+from app.models import EmailReceipt, EmailReceiptStatus, Place, Trip
 from app.services.mail_extraction import (
     ExtractedItem,
     ExtractedLodging,
@@ -348,15 +351,81 @@ def test_import_no_matching_trip_stays_extracted(client, make_user, admin, resen
     assert _receipt(session, "re_3").status is EmailReceiptStatus.EXTRACTED
 
 
-def test_import_ambiguous_when_two_trips_overlap(client, make_user, admin, make_trip, resend, mail_extractor, session):
+def test_import_goes_to_the_oldest_of_two_overlapping_trips(client, make_user, admin, make_trip, resend, mail_extractor, session):
     sun = make_user("sun")
     t1, t2 = make_trip(sun), make_trip(sun)  # two trips over the same dates
+    # The test shares one transaction, so now() stamps both alike: age t1.
+    session.get(Trip, uuid.UUID(t1["id"])).created_at -= timedelta(days=1)
+    session.commit()
     _make_extracted(client, admin, resend, mail_extractor, "re_4", "sun@example.com", FLIGHT)
 
     body = client.post("/admin/received/mail/import/re_4", headers=admin).json()
-    assert body["outcome"] == "ambiguous"
-    assert set(body["candidate_trip_ids"]) == {t1["id"], t2["id"]}
-    assert _receipt(session, "re_4").status is EmailReceiptStatus.EXTRACTED
+    assert body["outcome"] == "placed"
+    assert body["trip_id"] == t1["id"]
+    assert client.get(f"/trips/{t2['id']}/items", headers=sun).json() == []
+
+
+def _one_leg(start, end):
+    return Extraction(
+        category="flight", confidence=0.95, summary="flight",
+        items=[ExtractedItem(
+            kind="transit", transit_mode="flight", title="Flight",
+            segments=[ExtractedSegment(
+                transit_mode="flight", carrier="ANA", flight_number="NH1",
+                start_local=start, start_timezone="Asia/Tokyo",
+                end_local=end, end_timezone="Asia/Tokyo",
+                origin=ExtractedPlace(name="ITM", iata_code="ITM", city="Osaka"),
+                destination=ExtractedPlace(name="HND", iata_code="HND", city="Tokyo"),
+            )],
+        )],
+    )
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "outcome"),
+    [
+        ("2026-04-08T19:00", "2026-04-08T21:00", "placed"),  # lands 21:00 the eve before
+        ("2026-04-08T18:00", "2026-04-08T20:59", "no_match"),  # lands a minute too early
+        ("2026-04-16T03:00", "2026-04-16T05:00", "placed"),  # leaves 03:00 the morning after
+        ("2026-04-16T03:01", "2026-04-16T05:00", "no_match"),  # leaves a minute too late
+    ],
+)
+def test_import_grace_around_trip_dates(client, make_user, admin, make_trip, resend, mail_extractor, start, end, outcome):
+    sun = make_user("sun")
+    trip = make_trip(sun)  # 2026-04-09 .. 04-15
+    _make_extracted(client, admin, resend, mail_extractor, "re_g", "sun@example.com", _one_leg(start, end))
+
+    body = client.post("/admin/received/mail/import/re_g", headers=admin).json()
+    assert body["outcome"] == outcome
+    if outcome == "placed":
+        assert body["trip_id"] == trip["id"]
+
+
+def test_import_grace_is_for_transit_only(client, make_user, admin, make_trip, resend, mail_extractor):
+    sun = make_user("sun")
+    make_trip(sun)  # 2026-04-09 .. 04-15
+    dinner = Extraction(category="other", confidence=0.9, summary="dinner", items=[ExtractedItem(
+        kind="activity", title="Dinner", start_local="2026-04-08T22:00", start_timezone="Asia/Tokyo",
+    )])
+    _make_extracted(client, admin, resend, mail_extractor, "re_d", "sun@example.com", dinner)
+
+    assert client.post("/admin/received/mail/import/re_d", headers=admin).json()["outcome"] == "no_match"
+
+
+def test_import_prefers_the_trip_whose_dates_take_the_flight_over_grace(client, make_user, admin, make_trip, resend, mail_extractor):
+    sun = make_user("sun")
+    japan = make_trip(sun)  # 2026-04-09 .. 04-15
+    later = client.post("/trips", headers=sun, json={
+        "title": "Okinawa", "start_date": "2026-04-16", "end_date": "2026-04-18",
+        "extends_trip_id": japan["id"],
+    })
+    assert later.status_code == 201, later.text
+    # Leaves 01:00 on the 16th: in Japan's grace, but on Okinawa's own first day.
+    _make_extracted(client, admin, resend, mail_extractor, "re_x", "sun@example.com",
+                    _one_leg("2026-04-16T01:00", "2026-04-16T03:30"))
+
+    body = client.post("/admin/received/mail/import/re_x", headers=admin).json()
+    assert (body["outcome"], body["trip_id"]) == ("placed", later.json()["id"])
 
 
 def test_import_ignores_trips_the_sender_isnt_on(client, make_user, admin, make_trip, resend, mail_extractor):
