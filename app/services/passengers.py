@@ -14,8 +14,9 @@ looks for the passenger rather than assuming the sender:
 The caller falls back to the receipt's owner when both come up empty (an image
 that names nobody, or names only people who aren't on the trip).
 
-Matching is against one trip's roster. A member with no account is known only
-by the email they were added at, so a name can only match a linked member.
+Matching is against one trip's roster. A member's name is their account's
+display name, or for a member with no account the name the organizer gave them
+(`TripMember.display_name`); with neither they can only be matched by email.
 """
 from __future__ import annotations
 
@@ -77,9 +78,7 @@ def _by_name(members: Sequence[TripMember], name: Any) -> TripMember | None:
     exact: list[TripMember] = []
     partial: list[TripMember] = []
     for member in members:
-        if member.user is None:
-            continue
-        have = name_tokens(member.user.display_name)
+        have = name_tokens(member.display_name)
         if not have:
             continue
         if have == wanted:

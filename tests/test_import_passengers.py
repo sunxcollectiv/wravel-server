@@ -242,9 +242,11 @@ def test_image_naming_nobody_on_the_trip_is_the_uploaders(
 # --- matching ---
 
 
-def _member(id_, email, display_name=None):
+def _member(id_, email, display_name=None, name=None):
+    """`display_name` is an account's; `name` is what an organizer called a
+    member who has no account."""
     user = SimpleNamespace(email=email, display_name=display_name) if display_name else None
-    return SimpleNamespace(id=id_, email=email, user=user)
+    return SimpleNamespace(id=id_, email=email, user=user, display_name=display_name or name)
 
 
 def test_name_tokens_ignore_order_case_accents_and_titles():
@@ -270,10 +272,31 @@ def test_an_exact_name_beats_a_partial_one_and_a_tie_matches_nobody():
     assert match_travelers([alex, other_alex], [{"name": "Alex Kim"}]) == []
 
 
-def test_a_member_without_an_account_is_never_matched_by_name():
+def test_a_member_with_no_account_and_no_name_is_never_matched_by_name():
     guest = _member(1, "guest@example.com")
     assert match_travelers([guest], [{"name": "guest"}]) == []
     assert match_travelers([guest], [{"name": "x", "email": " Guest@Example.com "}]) == [guest]
+
+
+def test_a_member_with_no_account_matches_by_the_name_the_organizer_gave():
+    sun = _member(1, "sun@example.com", "Sun Chen")
+    matthew = _member(2, "mm98@example.com", name="Matthew Bonilla")
+    assert match_travelers([sun, matthew], [{"name": "BONILLA/MATTHEW MR"}]) == [matthew]
+
+
+def test_image_goes_to_a_named_member_who_has_no_account(
+    client, make_user, make_trip, image_extractor
+):
+    sun = make_user("sun")
+    trip = make_trip(sun)
+    added = client.post(
+        f"/trips/{trip['id']}/members",
+        json={"email": "mm98@example.com", "name": "Matthew Bonilla"},
+        headers=sun,
+    )
+    assert added.status_code == 201, added.text
+    _upload(client, image_extractor, sun, _flight(ExtractedTraveler(name="MATTHEW BONILLA")))
+    assert _for(client, trip, sun) == ["mm98@example.com"]
 
 
 def test_sender_chain_takes_the_earliest_member():
