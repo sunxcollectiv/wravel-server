@@ -34,6 +34,7 @@ from app.schemas import (
     TripDayUpdate,
     TripMemberCreate,
     TripMemberRead,
+    TripMemberUpdate,
     TripListEntry,
     TripQuote,
     TripRead,
@@ -494,6 +495,30 @@ def add_member(
     with session.begin_nested():
         member = _new_member(session, trip, payload)
         _settle(session, trip, user, now, None)
+    session.commit()
+    session.refresh(member)
+    return member
+
+
+@router.patch("/{trip_id}/members/{member_id}", response_model=TripMemberRead)
+def update_member(
+    member_id: uuid.UUID, payload: TripMemberUpdate, trip: OrganizerTrip, session: SessionDep
+) -> TripMember:
+    """Organizers rename or re-role one person without sending the whole
+    roster. Once they have an account, its own name is the one shown; a
+    name set here is kept underneath. The owner is always an organizer."""
+    member = next((m for m in trip.members if m.id == member_id), None)
+    if member is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Member not found")
+    changes = payload.model_dump(exclude_unset=True)
+    if "role" in changes:
+        if changes["role"] is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "role cannot be null")
+        if member.user_id == trip.owner_id and changes["role"] is not TripRole.ORGANIZER:
+            raise HTTPException(status.HTTP_409_CONFLICT, "The owner is always an organizer")
+        member.role = changes["role"]
+    if "name" in changes:
+        member.name = changes["name"]
     session.commit()
     session.refresh(member)
     return member

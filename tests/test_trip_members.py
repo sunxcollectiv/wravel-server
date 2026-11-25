@@ -288,3 +288,40 @@ def test_an_account_name_replaces_the_given_one(client, make_user, make_trip):
         url, json={"members": [{"email": sean.email, "name": "Other"}]}, headers=sun
     )
     assert _names(patched.json()["members"])["sean@example.com"] == "Sean"
+
+
+def test_editing_one_member(client, make_user, make_trip):
+    sun, sean = make_user("sun"), make_user("sean")
+    trip = make_trip(
+        sun, members=[{"email": "grandma@example.com", "name": "Grandma"}, {"email": sean.email}]
+    )
+    url = f"/trips/{trip['id']}/members"
+    ids = _member_ids(trip)
+    grandma = f"{url}/{ids['grandma@example.com']}"
+
+    renamed = client.patch(grandma, json={"name": "Nana"}, headers=sun)
+    assert renamed.status_code == 200, renamed.text
+    assert (renamed.json()["display_name"], renamed.json()["role"]) == ("Nana", "member")
+
+    # Role alone leaves the name; a null name clears it.
+    promoted = client.patch(grandma, json={"role": "organizer"}, headers=sun).json()
+    assert (promoted["display_name"], promoted["role"]) == ("Nana", "organizer")
+    cleared = client.patch(grandma, json={"name": None}, headers=sun).json()
+    assert cleared["display_name"] is None
+
+    # Everyone else on the roster is untouched.
+    roster = client.get(url, headers=sun).json()
+    assert _names(roster) == {
+        "sun@example.com": "Sun",
+        "grandma@example.com": None,
+        "sean@example.com": "Sean",
+    }
+
+    owner = f"{url}/{ids['sun@example.com']}"
+    assert client.patch(owner, json={"role": "member"}, headers=sun).status_code == 409
+    assert client.patch(grandma, json={"role": None}, headers=sun).status_code == 422
+    assert client.patch(grandma, json={"name": ""}, headers=sun).status_code == 422
+    nobody = f"{url}/00000000-0000-0000-0000-000000000000"
+    assert client.patch(nobody, json={"name": "X"}, headers=sun).status_code == 404
+    # Only organizers edit people.
+    assert client.patch(grandma, json={"name": "Gran"}, headers=sean).status_code == 403

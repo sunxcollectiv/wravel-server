@@ -324,6 +324,14 @@ def _unique_emails(members: list[TripMemberCreate] | None) -> list[TripMemberCre
 TripMembersIn = Annotated[list[TripMemberCreate], AfterValidator(_unique_emails)]
 
 
+class TripMemberUpdate(BaseModel):
+    """Edit one person on the roster. Leave a field out to keep it. A null
+    `name` clears it; `role` can't be null. Their email can't change here."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    role: TripRole | None = None
+
+
 class TripMemberRead(ReadModel):
     id: uuid.UUID
     email: str
