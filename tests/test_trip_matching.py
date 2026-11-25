@@ -118,7 +118,7 @@ def test_manual_transit_lands_in_grace_of_another_trip_in_the_group(client, make
 
 
 def test_manual_transit_that_fits_no_trip_stays_where_it_was_added(client, make_user, make_trip):
-    sun, _, japan, okinawa = _group(client, make_user, make_trip)
+    sun, _, _, okinawa = _group(client, make_user, make_trip)
     resp = client.post(
         f"/trips/{okinawa['id']}/items",
         json=_transit("2026-05-01T09:00:00", "2026-05-01T12:00:00"),
