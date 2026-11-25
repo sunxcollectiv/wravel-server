@@ -16,3 +16,6 @@ __pycache__/
 
 # .env backups from deploy/newenv.sh
 .env.*
+
+# Pre-migration database dumps from deploy/deploy.sh
+backups/

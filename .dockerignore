@@ -10,3 +10,5 @@
 .env
 .env.*
 *.p8
+# Database dumps from deploy/deploy.sh: user data, never in the image.
+backups

@@ -1,0 +1,87 @@
+# Tests every pull request, and deploys production whenever main changes: once
+# the tests pass, runs deploy/deploy.sh on the server over ssh, exactly what
+# deploying by hand does. deploy.sh migrates the database before the new API
+# starts, so a change that breaks the migrations or the suite never reaches it.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # "Run workflow" in the Actions tab, to redeploy without a new commit.
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      # Same Postgres as docker-compose.yml. The suite builds its own
+      # wravel_test database on it with the real migrations (tests/conftest.py).
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: wravel
+          POSTGRES_PASSWORD: wravel
+          POSTGRES_DB: wravel
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wravel -d wravel"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://wravel:wravel@127.0.0.1:5432/wravel
+    steps:
+      - uses: actions/checkout@v5
+      # Installs the Python in .python-version and the uv that wrote uv.lock's format.
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+      - name: One migration head
+        # Two branches that each add a migration on the same parent merge
+        # cleanly in git but leave Alembic two heads, and `upgrade head` on the
+        # server then refuses to run. Say so plainly rather than in a traceback.
+        run: |
+          heads="$(uv run alembic heads)"
+          echo "$heads"
+          if [[ "$(grep -c . <<<"$heads")" -ne 1 ]]; then
+            echo "::error::More than one Alembic head. Add a merge migration: uv run alembic merge heads -m 'merge heads'"
+            exit 1
+          fi
+      - run: uv run pytest
+
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    # One deploy at a time. A merge that lands mid-deploy queues and then
+    # deploys, rather than running alongside it (two migrations at once) or
+    # being dropped.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    # The Docker build on the server takes a few minutes the first time.
+    timeout-minutes: 20
+    steps:
+      - name: Run deploy.sh on the server
+        # Repository secrets: environments on a private repository need a paid
+        # plan. The _PROD suffix leaves room for a staging job with _STAGING ones.
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY_PROD }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS_PROD }}
+          SSH_HOST: ${{ secrets.DEPLOY_HOST_PROD }}
+          SSH_USER: ${{ secrets.DEPLOY_USER_PROD }}
+        run: |
+          mkdir -p -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Pinned host key: a server that presents another one is refused.
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # The key's authorized_keys line on the server forces deploy.sh as
+          # the command, so this key can run nothing else.
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
+              -o ServerAliveInterval=30 \
+              "$SSH_USER@$SSH_HOST" /srv/apps/wravel-server/deploy/deploy.sh
