@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.api.webhooks import get_resend_webhook_secret, get_session_factory
+from app.config import get_settings
 from app.main import app
 from app.models import EmailReceipt
 from app.services import resend_webhook
@@ -73,7 +74,7 @@ def _received(email_id: str, sender: str) -> dict:
             "email_id": email_id,
             "created_at": "2026-03-01T12:00:00.000Z",
             "from": sender,
-            "to": ["trips@inbound.wravel.example"],
+            "to": ["trips@wravel.app"],
             "subject": "Your flight is booked",
             "message_id": f"<{email_id}@airline.example>",
             "attachments": [],
@@ -232,6 +233,55 @@ def test_a_crash_in_the_background_run_leaves_the_receipt_for_later(
 
     assert webhook(_received("re_1", "sun@example.com")).status_code == 200
     assert _receipt(session, "re_1").status.value == "received"
+
+
+@pytest.mark.parametrize(
+    "recipients",
+    [
+        {"to": ["trip@wravel.app"]},  # the typo
+        {"to": ["Wravel Trips <Trips@Wravel.app>"]},
+        {"to": ["someone@example.com"], "cc": ["trips@wravel.app"]},
+        {"to": [], "bcc": ["trips@wravel.app"]},
+    ],
+)
+def test_mail_to_the_trips_inbox_is_accepted_however_it_is_addressed(
+    webhook, session, recipients
+):
+    event = _received("re_to", "sun@example.com")
+    event["data"].update(recipients)
+    assert webhook(event).json() == {"status": "accepted"}
+    assert session.scalar(select(func.count()).select_from(EmailReceipt)) == 1
+
+
+@pytest.mark.parametrize(
+    "recipients",
+    [
+        {"to": ["trips@dev.wravel.app"]},
+        {"to": ["hello@wravel.app"]},
+        {"to": ["trips@wravel.app.example.com"]},
+        {"to": []},
+        {"to": None},
+    ],
+)
+def test_mail_for_another_address_is_ignored_and_not_stored(webhook, session, recipients):
+    event = _received("re_other", "sun@example.com")
+    event["data"].update(recipients)
+    response = webhook(event)
+    assert response.status_code == 200 and response.json() == {"status": "ignored"}
+    assert session.scalar(select(func.count()).select_from(EmailReceipt)) == 0
+
+
+def test_a_dev_server_takes_dev_mail_and_leaves_productions(webhook, session, monkeypatch):
+    monkeypatch.setattr(
+        get_settings(), "trip_inboxes", "trips@dev.wravel.app, Trip@dev.wravel.app"
+    )
+    prod = _received("re_prod", "sun@example.com")  # to trips@wravel.app
+    assert webhook(prod).json() == {"status": "ignored"}
+    dev = _received("re_dev", "sun@example.com")
+    dev["data"]["to"] = ["trip@dev.wravel.app"]
+    assert webhook(dev).json() == {"status": "accepted"}
+    stored = session.scalars(select(EmailReceipt.resend_email_id)).all()
+    assert stored == ["re_dev"]
 
 
 def test_other_event_types_are_acknowledged_and_ignored(webhook, session):

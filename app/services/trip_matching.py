@@ -65,19 +65,26 @@ def _in_grace(trip: Trip, stretch: Stretch) -> bool:
     )
 
 
-def _oldest(trips: Iterable[Trip]) -> Trip | None:
-    return min(trips, key=lambda trip: (trip.created_at, str(trip.id)), default=None)
+def _oldest_first(trips: Iterable[Trip]) -> list[Trip]:
+    return sorted(trips, key=lambda trip: (trip.created_at, str(trip.id)))
+
+
+def matching_trips(trips: Iterable[Trip], stretches: Sequence[Stretch]) -> list[Trip]:
+    """The trips of `trips` the booking fits best, oldest first: those whose
+    dates overlap it, else those it reaches by grace (see the module doc).
+    Empty when none fits or the booking has no times at all."""
+    if not stretches:
+        return []
+    trips = list(trips)
+    return _oldest_first(t for t in trips if _overlaps(t, stretches)) or _oldest_first(
+        t for t in trips if any(_in_grace(t, s) for s in stretches)
+    )
 
 
 def match_trip(trips: Iterable[Trip], stretches: Sequence[Stretch]) -> Trip | None:
     """The trip of `trips` the booking belongs to (see the module doc), or None
     when none fits or the booking has no times at all."""
-    if not stretches:
-        return None
-    trips = list(trips)
-    return _oldest(t for t in trips if _overlaps(t, stretches)) or _oldest(
-        t for t in trips if any(_in_grace(t, s) for s in stretches)
-    )
+    return next(iter(matching_trips(trips, stretches)), None)
 
 
 def search_window(stretches: Sequence[Stretch]) -> tuple[date, date]:

@@ -255,7 +255,8 @@ are derived from a place's address when that place is first added.
 
 Settings are read from the environment or `.env` (`app/config.py`), which
 `deploy/newenv.sh` writes (see [Environments](#environments)). Everything
-except the database is optional; a feature with no key is switched off.
+except the database and `TRIP_INBOXES` is optional; a feature with no key is
+switched off.
 
 | Variable | Purpose |
 |---|---|
@@ -265,6 +266,7 @@ except the database is optional; a feature with no key is switched off.
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID` | Parsing forwarded emails and screenshots into trip items |
 | `RESEND_API_KEY` | Retrieving forwarded travel-confirmation emails |
 | `RESEND_WEBHOOK_SECRET` | Accepting Resend's `email.received` webhook at `POST /webhooks/resend` (the webhook's signing secret, `whsec_...`). Without it the route answers 503 |
+| `TRIP_INBOXES` | The inbox addresses this server takes forwarded mail for, comma-separated; mail sent anywhere else is skipped. Required, with no default anywhere: the server does not start without it, and `newenv.sh` asks for it and writes nothing if it gets none. For example `trips@wravel.app,trip@wravel.app` in production and `trips@dev.wravel.app,trip@dev.wravel.app` on a dev server |
 | `APNS_KEY_ID`, `APNS_TEAM_ID`, and `APNS_PRIVATE_KEY` or `APNS_KEY_PATH` | Push notifications. Without a key, pushes are skipped |
 | `APNS_USE_SANDBOX` | `true` (default) for Xcode builds; `false` for TestFlight and App Store builds |
 | `STOREKIT_APP_APPLE_ID` | Required to accept production in-app purchases |
@@ -277,14 +279,16 @@ Never commit `.env` or an APNs `.p8` key; both are git-ignored.
 A travel confirmation forwarded to the Resend inbound address becomes trip items without anyone asking for it:
 
 1. Resend posts an `email.received` event to `POST /webhooks/resend`. The call is authenticated by its signature, checked against `RESEND_WEBHOOK_SECRET`.
-2. The email is stored as a receipt and the webhook answers.
+2. The email is stored as a receipt and the webhook answers. Only mail sent to this environment's inbox (`TRIP_INBOXES`) is taken: say `trips@wravel.app` and `trip@wravel.app` in production, `trips@dev.wravel.app` on a dev server. Anything else the Resend account receives is acknowledged and dropped, so production and a dev server sharing one account never import each other's mail.
 3. In the background the email is checked against its sender, read by Claude, and imported into the sender's trip.
 
-An email is only imported when its From address is a registered user's email and the booking's dates overlap exactly one of their trips. Otherwise the receipt is kept with the reason (`ignored`, `rejected`, or `extracted` with no trip chosen).
+An email is only imported when its From address is a registered user's email and the booking's dates match one of their trips. Otherwise the receipt is kept with the reason (`ignored`, `rejected`, or `extracted` with no trip chosen).
+
+The forwarder decides which trips are considered, not who the booking is for: they may be passing on a confirmation another member sent them. Each item goes to the passengers the confirmation names, matched to the trip's members by email and then by name: their account's display name, or the name the organizer gave a member who has no account. If it names nobody on the trip, the item goes to the first sender in the forwarding chain who is on it, which at the latest is the forwarder. When several of the forwarder's trips match equally, the booking goes to the one that has a passenger other than the forwarder on it, if there is exactly one; otherwise to the oldest. A screenshot works the same way, except that there is no chain: with no passenger on the trip it goes to the uploader.
 
 To set it up, add a webhook in the Resend dashboard for the `email.received` event pointing at `https://<host>/webhooks/resend`, and put its signing secret in `RESEND_WEBHOOK_SECRET`.
 
-`POST /admin/received/mail/process` runs the same pipeline by pulling recent mail from Resend. Use it to catch up on anything a webhook missed, such as mail that arrived while the server was down.
+`POST /admin/received/mail/process` runs the same pipeline by pulling recent mail from Resend. It passes over mail for other addresses the same way. Use it to catch up on anything a webhook missed, such as mail that arrived while the server was down.
 
 ## Areas
 

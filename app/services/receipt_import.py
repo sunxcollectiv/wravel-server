@@ -8,12 +8,21 @@ this stage touches (``user_id`` — the matched sender or the uploader —,
 shape whatever produced it, so one importer serves both. The per-source routes
 pass their own receipt in.
 
-The trip is matched by the booking's dates among the trips the owner is on
-(see app.services.trip_matching: date overlap first, then a grace window for
-transit landing the evening before or leaving the small hours after a trip;
-the oldest trip wins a tie). No match leaves the receipt ``extracted`` with a
+The trip is matched by the booking's dates among the trips the owner is on,
+in any role (see app.services.trip_matching: date overlap first, then a grace
+window for transit landing the evening before or leaving the small hours after
+a trip). When several trips match equally, the booking's passengers settle it
+if they can: the one trip that someone other than the owner is matched on.
+Otherwise the oldest wins. No match leaves the receipt ``extracted`` with a
 ``no_match`` outcome, to be re-run once a trip fits. Creating a new trip is
 out of scope.
+
+Who each item is for is worked out against the chosen trip's roster rather than
+assumed to be the owner, who may be passing on someone else's booking (see
+`app.services.passengers`): the travelers the booking names, matched to members
+by email and then display name; for an email with none of those on the trip, the
+first sender along its forwarding chain who is; failing that, the owner. The
+owner stays the item's creator either way.
 
 Lodging: a stay whose confirmation gives only the check-in/check-out *dates*
 gets the conventional times — check-in 15:00, check-out 11:00 — rather than
@@ -30,7 +39,7 @@ from datetime import datetime, time, timedelta
 from typing import Any, Literal
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.trip_items import build_trip_item
 from app.models import (
@@ -44,9 +53,10 @@ from app.models import (
     TripMember,
     User,
 )
-from app.schemas import TripItemCreate
+from app.schemas import ParticipantSet, TripItemCreate
+from app.services.passengers import match_sender, match_travelers
 from app.services.place_resolver import PlaceCache, resolve_place
-from app.services.trip_matching import Stretch, match_trip, search_window
+from app.services.trip_matching import Stretch, matching_trips, search_window
 
 Receipt = EmailReceipt | ImageReceipt
 
@@ -108,18 +118,70 @@ def _booking_stretches(extraction: dict[str, Any]) -> list[Stretch]:
     return stretches
 
 
-def _match_trip(session: Session, user_id: Any, stretches: list[Stretch]) -> Trip | None:
-    """The member-trip the booking belongs to (see app.services.trip_matching)."""
+def _roster(session: Session, trip: Trip) -> list[TripMember]:
+    return list(
+        session.scalars(
+            select(TripMember)
+            .where(TripMember.trip_id == trip.id)
+            .options(selectinload(TripMember.user))
+            .order_by(TripMember.created_at, TripMember.id)
+        )
+    )
+
+
+def _sender_chain(receipt: Receipt, extraction: dict[str, Any]) -> list[Any]:
+    """An email's senders, original message first: the ones read out of its
+    quoted headers, then whoever actually sent it to us. An image has no chain —
+    a sender visible in a screenshot is part of the picture, not of how the
+    booking reached us."""
+    if not isinstance(receipt, EmailReceipt):
+        return []
+    return [*(extraction.get("sender_emails") or []), receipt.from_address]
+
+
+def _passengers(
+    roster: list[TripMember], item: dict[str, Any], chain: list[Any]
+) -> list[TripMember]:
+    """The members one extracted item is for: the travelers it names who are on
+    the trip, else the first sender along the chain who is. Empty when neither
+    finds anyone (the caller falls back to the receipt's owner)."""
+    named = match_travelers(roster, item.get("travelers"))
+    if named:
+        return named
+    sender = match_sender(roster, chain)
+    return [sender] if sender is not None else []
+
+
+def _match_trip(session: Session, receipt: Receipt, extraction: dict[str, Any]) -> Trip | None:
+    """The member-trip the booking belongs to (see app.services.trip_matching).
+    Among several that match equally, it's the only one where the booking is
+    for someone besides the owner: being on all of them, the owner can't tell
+    them apart, but a fellow passenger who is on just one can. Failing that,
+    the oldest."""
+    stretches = _booking_stretches(extraction)
     if not stretches:
         return None
     first, last = search_window(stretches)
-    member_trip_ids = select(TripMember.trip_id).where(TripMember.user_id == user_id)
+    member_trip_ids = select(TripMember.trip_id).where(TripMember.user_id == receipt.user_id)
     nearby = session.scalars(
         select(Trip).where(
             Trip.id.in_(member_trip_ids), Trip.start_date <= last, Trip.end_date >= first
         )
     )
-    return match_trip(nearby, stretches)
+    candidates = matching_trips(nearby, stretches)
+    if len(candidates) <= 1:
+        return candidates[0] if candidates else None
+    chain = _sender_chain(receipt, extraction)
+    told_apart = [
+        trip
+        for trip in candidates
+        if any(
+            member.user_id != receipt.user_id
+            for item in extraction.get("items") or []
+            for member in _passengers(_roster(session, trip), item, chain)
+        )
+    ]
+    return told_apart[0] if len(told_apart) == 1 else candidates[0]
 
 
 def _ends(
@@ -203,10 +265,16 @@ def _rooms(raw: dict[str, Any] | None) -> list[dict[str, Any]] | None:
 
 
 def _item_payload(
-    session: Session, item: dict[str, Any], *, user_id: Any, cache: PlaceCache
+    session: Session,
+    item: dict[str, Any],
+    *,
+    user_id: Any,
+    cache: PlaceCache,
+    participants: list[TripMember],
 ) -> TripItemCreate:
     """Map one extracted item to a create payload, resolving its places (airports/
-    hotels) to Place ids via the shared resolver as we go."""
+    hotels) to Place ids via the shared resolver as we go. `participants` are
+    the members it's for."""
     kind = item.get("kind") or "activity"
 
     def place_id(
@@ -229,6 +297,7 @@ def _item_payload(
         "title": (item.get("title") or "Booking")[:200],
         "confirmation_number": _text(item.get("confirmation_number"), 120),
         "booking_number": _text(item.get("booking_number"), 120),
+        "participants": [ParticipantSet(member_id=member.id) for member in participants],
     }
     segments = item.get("segments") or []
     if kind == "transit" and segments:
@@ -293,7 +362,7 @@ def import_receipt(session: Session, receipt: Receipt) -> ImportOutcome:
         return ImportOutcome(receipt, "skipped")
 
     extraction = receipt.extracted or {}
-    trip = _match_trip(session, receipt.user_id, _booking_stretches(extraction))
+    trip = _match_trip(session, receipt, extraction)
     if trip is None:
         return ImportOutcome(receipt, "no_match")
 
@@ -301,9 +370,18 @@ def import_receipt(session: Session, receipt: Receipt) -> ImportOutcome:
     # the user hasn't paid for should block this step. See [[monetization-model]].
     user = session.get(User, receipt.user_id)
     cache: PlaceCache = {}  # one place per booking (a layover airport resolves once)
+    roster = _roster(session, trip)
+    chain = _sender_chain(receipt, extraction)
+    owner = [member for member in roster if member.user_id == receipt.user_id]
     count = 0
     for item in extraction.get("items") or []:
-        payload = _item_payload(session, item, user_id=receipt.user_id, cache=cache)
+        payload = _item_payload(
+            session,
+            item,
+            user_id=receipt.user_id,
+            cache=cache,
+            participants=_passengers(roster, item, chain) or owner,
+        )
         _link_source(build_trip_item(session, trip, user, payload), receipt)
         count += 1
 

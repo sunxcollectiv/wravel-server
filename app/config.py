@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +29,14 @@ class Settings(BaseSettings):
     # events to POST /webhooks/resend (Resend dashboard, Webhooks; starts with
     # "whsec_"). Without it the webhook route refuses every call.
     resend_webhook_secret: str | None = None
+    # The inbox addresses this server takes forwarded mail for, comma-separated
+    # ("trip@" alongside "trips@" catches the obvious typo). One Resend account
+    # hands every environment the same mail, by webhook and in the received
+    # list, so each takes only what was sent to its own inbox: production the
+    # real one, a dev server its own. Required, with no default: a
+    # server that guessed could quietly import another environment's mail, so
+    # one that isn't told doesn't start. deploy/newenv.sh asks for it.
+    trip_inboxes: str
     # Anthropic's Claude API. Used to parse forwarded travel confirmation
     # emails into structured trip items.
     anthropic_api_key: str | None = None
@@ -60,6 +69,17 @@ class Settings(BaseSettings):
     storekit_app_apple_id: int | None = None
     storekit_allow_sandbox: bool = True
     storekit_allow_xcode: bool = False
+
+
+    @field_validator("trip_inboxes")
+    @classmethod
+    def _names_an_inbox(cls, value: str) -> str:
+        addresses = [address.strip() for address in value.split(",") if address.strip()]
+        if not addresses or not all("@" in address for address in addresses):
+            raise ValueError(
+                "TRIP_INBOXES must list at least one inbox address, comma-separated"
+            )
+        return value
 
 
 @lru_cache

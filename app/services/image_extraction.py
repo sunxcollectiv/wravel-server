@@ -34,7 +34,12 @@ _INTRO = """\
 You extract structured travel-booking data from a single image — a screenshot or \
 photo of a booking, such as a confirmation screen, a ticket, an itinerary, or a \
 reservation. Read all the visible text, including small print. Extract only what \
-the image actually shows; never invent details."""
+the image actually shows; never invent details.
+
+A screenshot or photo often catches more than the booking: the chat or email it \
+was shared in, with its sender and contacts; a status bar, notifications, an \
+app's account name; other documents on a desk. None of that says who the booking \
+is for. Take the travelers only from the booking itself (see "travelers" below)."""
 _SYSTEM_PROMPT = f"{_INTRO}\n\n{EXTRACTION_SCHEMA_PROMPT}"
 
 

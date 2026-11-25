@@ -96,6 +96,16 @@ ask ANTHROPIC_API_KEY      "Anthropic API key" "" secret
 ask ANTHROPIC_WORKSPACE_ID "Anthropic workspace id (org-level keys only)"
 ask RESEND_API_KEY         "Resend API key" "" secret
 ask RESEND_WEBHOOK_SECRET  "Resend webhook signing secret (whsec_...)" "" secret
+# One Resend account receives for every environment, so each server takes only
+# the mail sent to its own inbox. No default here either: it has to be stated
+# (or carried over from the old .env), and the app does not start without it.
+ask TRIP_INBOXES "Inbox address(es) this environment takes forwarded mail for, comma-separated (required)"
+TRIP_INBOXES="${TRIP_INBOXES// /}"
+if [[ "$TRIP_INBOXES" != *@* ]]; then
+    echo "TRIP_INBOXES is required: the inbox address(es) for $ENV_NAME, comma-separated." >&2
+    echo "Nothing was written." >&2
+    exit 1
+fi
 
 ask APNS_KEY_ID  "APNs key id"
 ask APNS_TEAM_ID "Apple team id"
@@ -179,6 +189,8 @@ umask 077
     echo "# Resend: forwarded travel-confirmation emails and their webhook"
     line RESEND_API_KEY "$RESEND_API_KEY"
     line RESEND_WEBHOOK_SECRET "$RESEND_WEBHOOK_SECRET"
+    echo "# The inbox this environment takes forwarded mail for; other mail is skipped"
+    line TRIP_INBOXES "$TRIP_INBOXES"
     echo
     echo "# --- Apple push notifications --------------------------------------------"
     line APNS_KEY_ID "$APNS_KEY_ID"
