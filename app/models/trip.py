@@ -181,7 +181,12 @@ class TripMember(UUIDPrimaryKeyMixin, Base):
     person ever signs up, so the organizer can plan around them (RSVPs are
     keyed by member, not user). `user_id` is filled in as soon as an account
     with that email exists, at add time or when they register, and from then
-    on that account can open the trip."""
+    on that account can open the trip.
+
+    `name` is what the organizer calls them, so they can be shown before
+    they have an account (or if they never make one). Once linked, the
+    account's own display name takes over (see `display_name`); `name` is
+    kept underneath for if the account goes away."""
 
     __tablename__ = "trip_members"
     __table_args__ = (
@@ -198,6 +203,8 @@ class TripMember(UUIDPrimaryKeyMixin, Base):
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
+    # Set by an organizer; null if they gave none.
+    name: Mapped[str | None] = mapped_column(String(120))
     role: Mapped[TripRole] = mapped_column(
         str_enum(TripRole, "trip_role"), default=TripRole.MEMBER
     )
@@ -207,3 +214,8 @@ class TripMember(UUIDPrimaryKeyMixin, Base):
 
     trip: Mapped[Trip] = relationship(back_populates="members")
     user: Mapped[User | None] = relationship()
+
+    @property
+    def display_name(self) -> str | None:
+        """The name to show: their account's, else the organizer's."""
+        return self.user.display_name if self.user is not None else self.name

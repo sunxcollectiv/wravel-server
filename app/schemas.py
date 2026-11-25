@@ -304,9 +304,14 @@ class PlacesRefreshResponse(BaseModel):
 
 class TripMemberCreate(BaseModel):
     """A person on the trip, by email. They needn't have an account: the row is
-    linked to one as soon as it exists."""
+    linked to one as soon as it exists.
+
+    `name` is what to call them until they have an account, whose own name
+    then takes over. On a roster PATCH, leave it out to keep the name they
+    have; null clears it."""
 
     email: Email
+    name: str | None = Field(default=None, min_length=1, max_length=120)
     role: TripRole = TripRole.MEMBER
 
 
@@ -319,9 +324,20 @@ def _unique_emails(members: list[TripMemberCreate] | None) -> list[TripMemberCre
 TripMembersIn = Annotated[list[TripMemberCreate], AfterValidator(_unique_emails)]
 
 
+class TripMemberUpdate(BaseModel):
+    """Edit one person on the roster. Leave a field out to keep it. A null
+    `name` clears it; `role` can't be null. Their email can't change here."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    role: TripRole | None = None
+
+
 class TripMemberRead(ReadModel):
     id: uuid.UUID
     email: str
+    # What to call them: their account's display name once linked, else the
+    # name the organizer gave them. Null when there's neither.
+    display_name: str | None
     # Null while no account has this email.
     user: UserRead | None
     role: TripRole

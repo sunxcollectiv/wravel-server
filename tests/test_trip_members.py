@@ -207,3 +207,121 @@ def test_member_ids_are_scoped_to_their_trip(client, make_user, make_trip):
     italy = make_trip(sun, title="Italy")
     grandma = _member_ids(japan)["grandma@example.com"]
     assert client.delete(f"/trips/{italy['id']}/members/{grandma}", headers=sun).status_code == 404
+
+
+def _names(members: list[dict]) -> dict[str, str | None]:
+    return {m["email"]: m["display_name"] for m in members}
+
+
+def test_members_without_accounts_go_by_the_name_they_were_given(client, make_user, make_trip):
+    sun = make_user("sun")
+    trip = make_trip(
+        sun,
+        members=[{"email": "grandma@example.com", "name": "Grandma"}, {"email": "amy@example.com"}],
+    )
+    url = f"/trips/{trip['id']}"
+    # The owner goes by their account's name; others by what they were given.
+    assert _names(trip["members"]) == {
+        "sun@example.com": "Sun",
+        "grandma@example.com": "Grandma",
+        "amy@example.com": None,
+    }
+
+    added = client.post(
+        f"{url}/members", json={"email": "bo@example.com", "name": "Bo"}, headers=sun
+    )
+    assert added.status_code == 201, added.text
+    assert added.json()["display_name"] == "Bo"
+
+    # On a roster PATCH, a name sent replaces theirs, null clears it, and
+    # leaving it out keeps it.
+    patched = client.patch(
+        url,
+        json={
+            "members": [
+                {"email": "grandma@example.com"},
+                {"email": "amy@example.com", "name": "Amy"},
+                {"email": "bo@example.com", "name": None},
+            ]
+        },
+        headers=sun,
+    )
+    assert patched.status_code == 200, patched.text
+    assert _names(patched.json()["members"]) == {
+        "sun@example.com": "Sun",
+        "grandma@example.com": "Grandma",
+        "amy@example.com": "Amy",
+        "bo@example.com": None,
+    }
+
+    # Items show participants by the same name.
+    ids = _member_ids(patched.json())
+    item = client.post(
+        f"{url}/items",
+        json={
+            "kind": "activity",
+            "title": "Tea",
+            "starts_at": "2026-04-10T15:00:00",
+            "participants": [{"member_id": ids["grandma@example.com"]}],
+        },
+        headers=sun,
+    )
+    assert item.status_code == 201, item.text
+    assert [p["member"]["display_name"] for p in item.json()["participants"]] == ["Grandma"]
+
+    assert client.post(
+        f"{url}/members", json={"email": "x@example.com", "name": ""}, headers=sun
+    ).status_code == 422
+
+
+def test_an_account_name_replaces_the_given_one(client, make_user, make_trip):
+    sun = make_user("sun")
+    trip = make_trip(sun, members=[{"email": "sean@example.com", "name": "Seany"}])
+    url = f"/trips/{trip['id']}"
+
+    sean = make_user("sean")
+    roster = client.get(f"{url}/members", headers=sun).json()
+    assert _names(roster)["sean@example.com"] == "Sean"
+
+    # Once linked, an organizer's name doesn't show over theirs.
+    patched = client.patch(
+        url, json={"members": [{"email": sean.email, "name": "Other"}]}, headers=sun
+    )
+    assert _names(patched.json()["members"])["sean@example.com"] == "Sean"
+
+
+def test_editing_one_member(client, make_user, make_trip):
+    sun, sean = make_user("sun"), make_user("sean")
+    trip = make_trip(
+        sun, members=[{"email": "grandma@example.com", "name": "Grandma"}, {"email": sean.email}]
+    )
+    url = f"/trips/{trip['id']}/members"
+    ids = _member_ids(trip)
+    grandma = f"{url}/{ids['grandma@example.com']}"
+
+    renamed = client.patch(grandma, json={"name": "Nana"}, headers=sun)
+    assert renamed.status_code == 200, renamed.text
+    assert (renamed.json()["display_name"], renamed.json()["role"]) == ("Nana", "member")
+
+    # Role alone leaves the name; a null name clears it.
+    promoted = client.patch(grandma, json={"role": "organizer"}, headers=sun).json()
+    assert (promoted["display_name"], promoted["role"]) == ("Nana", "organizer")
+    cleared = client.patch(grandma, json={"name": None}, headers=sun).json()
+    assert cleared["display_name"] is None
+
+    # Everyone else on the roster is untouched.
+    roster = client.get(url, headers=sun).json()
+    assert _names(roster) == {
+        "sun@example.com": "Sun",
+        "grandma@example.com": None,
+        "sean@example.com": "Sean",
+    }
+
+    owner = f"{url}/{ids['sun@example.com']}"
+    assert client.patch(owner, json={"role": "member"}, headers=sun).status_code == 409
+    assert client.patch(grandma, json={"role": None}, headers=sun).status_code == 422
+    assert client.patch(grandma, json={"name": ""}, headers=sun).status_code == 422
+    nobody = f"{url}/00000000-0000-0000-0000-000000000000"
+    assert client.patch(nobody, json={"name": "X"}, headers=sun).status_code == 404
+    # Only organizers edit people.
+    assert client.patch(grandma, json={"name": "Gran"}, headers=sean).status_code == 403
