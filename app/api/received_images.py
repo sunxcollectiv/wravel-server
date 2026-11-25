@@ -94,7 +94,7 @@ def process_upload(
 ) -> ImportOutcome:
     """Upload a screenshot and run the whole pipeline in one call — store,
     extract (Claude vision), and import into the caller's matching trip. Returns
-    the final outcome (`placed`/`no_match`/`ambiguous`, or `skipped` with a
+    the final outcome (`placed`/`no_match`, or `skipped` with a
     `rejected` receipt when it isn't a confident booking) so the client can
     update its progress pill and refresh the itinerary in one round-trip."""
     image = _store_upload(session, user.id, file)
@@ -245,8 +245,8 @@ def import_recent(
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> list[ImportOutcome]:
     """Import the backlog: every `extracted` image, oldest first, up to `limit`.
-    Places the ones that uniquely match a trip; the rest come back `no_match`/
-    `ambiguous` and stay `extracted` (safe to re-run once more trips exist)."""
+    Places the ones that fit a trip; the rest come back `no_match` and stay
+    `extracted` (safe to re-run once more trips exist)."""
     images = session.scalars(
         select(ImageReceipt)
         .where(ImageReceipt.status == EmailReceiptStatus.EXTRACTED)

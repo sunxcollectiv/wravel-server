@@ -1,7 +1,10 @@
 """Who an imported booking is for: the passenger it names, not whoever
 forwarded or uploaded it."""
+import uuid
+from datetime import timedelta
 from types import SimpleNamespace
 
+from app.models import Trip
 from app.services.mail_extraction import (
     ExtractedItem,
     ExtractedPlace,
@@ -31,6 +34,12 @@ def _flight(*travelers: ExtractedTraveler, sender_emails=(), confirmation="ABC12
             )],
         )],
     )
+
+
+def _age(session, trip):
+    """The test shares one transaction, so now() stamps every trip alike."""
+    session.get(Trip, uuid.UUID(trip["id"])).created_at -= timedelta(days=1)
+    session.commit()
 
 
 def _forward(client, admin, resend, mail_extractor, sender, extraction, email_id="re_p1") -> dict:
@@ -160,16 +169,27 @@ def test_passenger_picks_between_the_forwarders_overlapping_trips(
     assert body["outcome"] == "placed" and body["trip_id"] == shared["id"]
 
 
-def test_overlapping_trips_stay_ambiguous_when_the_passenger_is_the_forwarder(
-    client, make_user, admin, make_trip, add_member, resend, mail_extractor
+def test_overlapping_trips_go_to_the_oldest_when_the_passenger_is_the_forwarder(
+    client, make_user, admin, make_trip, add_member, resend, mail_extractor, session
 ):
     sun, bob = make_user("sun"), make_user("bob")
     shared = make_trip(sun)
     add_member(shared["id"], sun, bob)
-    own = make_trip(bob)
+    make_trip(bob)
+    _age(session, shared)
     body = _forward(client, admin, resend, mail_extractor, bob, _flight(ExtractedTraveler(name="Bob")))
-    assert body["outcome"] == "ambiguous"
-    assert set(body["candidate_trip_ids"]) == {shared["id"], own["id"]}
+    assert body["outcome"] == "placed" and body["trip_id"] == shared["id"]
+
+
+def test_passenger_beats_the_oldest_of_the_forwarders_overlapping_trips(
+    client, make_user, admin, make_trip, add_member, resend, mail_extractor, session
+):
+    sun, bob = make_user("sun"), make_user("bob")
+    _age(session, make_trip(bob))  # older, and Bob's alone
+    shared = make_trip(sun)
+    add_member(shared["id"], sun, bob)
+    body = _forward(client, admin, resend, mail_extractor, bob, _flight(ExtractedTraveler(name="Sun")))
+    assert body["outcome"] == "placed" and body["trip_id"] == shared["id"]
 
 
 # --- image ---

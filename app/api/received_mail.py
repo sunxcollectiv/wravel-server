@@ -147,8 +147,8 @@ def import_recent(
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> list[ImportResult]:
     """Import the backlog: every `extracted` receipt, oldest first, up to `limit`.
-    Places the ones that uniquely match a trip; the rest come back `no_match`/
-    `ambiguous` and stay `extracted` (safe to re-run once more trips exist)."""
+    Places the ones that fit a trip; the rest come back `no_match` and stay
+    `extracted` (safe to re-run once more trips exist)."""
     receipts = session.scalars(
         select(EmailReceipt)
         .where(EmailReceipt.status == EmailReceiptStatus.EXTRACTED)

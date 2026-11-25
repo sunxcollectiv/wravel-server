@@ -8,12 +8,14 @@ this stage touches (``user_id`` — the matched sender or the uploader —,
 shape whatever produced it, so one importer serves both. The per-source routes
 pass their own receipt in.
 
-The trip is auto-matched by date overlap among the trips the owner is on, in
-any role: a unique overlapping trip is used. When several overlap, the booking's
-passengers settle it if they can — the one trip that someone other than the
-owner is matched on; otherwise the receipt stays ``extracted`` with an
-``ambiguous`` outcome, as it does with ``no_match`` when none overlap (we never
-guess a placement). Creating a new trip is out of scope.
+The trip is matched by the booking's dates among the trips the owner is on,
+in any role (see app.services.trip_matching: date overlap first, then a grace
+window for transit landing the evening before or leaving the small hours after
+a trip). When several trips match equally, the booking's passengers settle it
+if they can: the one trip that someone other than the owner is matched on.
+Otherwise the oldest wins. No match leaves the receipt ``extracted`` with a
+``no_match`` outcome, to be re-run once a trip fits. Creating a new trip is
+out of scope.
 
 Who each item is for is worked out against the chosen trip's roster rather than
 assumed to be the owner, who may be passing on someone else's booking (see
@@ -32,8 +34,8 @@ the item's rooms (see `_rooms`). It's all the user's to edit afterwards.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
+from dataclasses import dataclass
+from datetime import datetime, time, timedelta
 from typing import Any, Literal
 
 from sqlalchemy import select
@@ -54,10 +56,11 @@ from app.models import (
 from app.schemas import ParticipantSet, TripItemCreate
 from app.services.passengers import match_sender, match_travelers
 from app.services.place_resolver import PlaceCache, resolve_place
+from app.services.trip_matching import Stretch, matching_trips, search_window
 
 Receipt = EmailReceipt | ImageReceipt
 
-Outcome = Literal["placed", "no_match", "ambiguous", "skipped"]
+Outcome = Literal["placed", "no_match", "skipped"]
 
 # The statuses the extract step will (re)run on; terminal ones are left alone, so
 # process is safe to re-run. Mirrors the per-source EXTRACTABLE_STATUSES.
@@ -70,7 +73,6 @@ class ImportOutcome:
     outcome: Outcome
     trip_id: Any = None  # uuid.UUID | None
     item_count: int = 0
-    candidate_trip_ids: list[Any] = field(default_factory=list)
 
 
 # What a stay's ends default to when the booking states only the dates.
@@ -93,42 +95,27 @@ def _as_datetime(local: Any, *, date_only_at: time = time(0)) -> datetime | None
     return parsed
 
 
-def _as_date(local: Any) -> date | None:
-    dt = _as_datetime(local)
-    return dt.date() if dt else None
-
-
-def _booking_date_span(extraction: dict[str, Any]) -> tuple[date, date] | None:
-    """The [earliest, latest] local date across the booking's items and legs."""
-    dates: list[date] = []
+def _booking_stretches(extraction: dict[str, Any]) -> list[Stretch]:
+    """Each item of the booking as the trip matcher sees it. A transit leaves
+    when its first leg does and lands when its last leg does; an item none of
+    whose times can be read is left out."""
+    stretches: list[Stretch] = []
     for item in extraction.get("items") or []:
-        parts: list[dict[str, Any]] = [item, *(item.get("segments") or [])]
-        for part in parts:
-            for key in ("start_local", "end_local"):
-                d = _as_date(part.get(key))
-                if d is not None:
-                    dates.append(d)
-    if not dates:
-        return None
-    return min(dates), max(dates)
-
-
-def _candidate_trips(
-    session: Session, user_id: Any, span: tuple[date, date] | None
-) -> list[Trip]:
-    """The trips the owner is on (organizer or member) whose dates overlap the
-    booking. Overlap = trip.start <= booking_end and trip.end >= booking_start."""
-    if span is None:
-        return []
-    start, end = span
-    member_trip_ids = select(TripMember.trip_id).where(TripMember.user_id == user_id)
-    return list(
-        session.scalars(
-            select(Trip)
-            .where(Trip.id.in_(member_trip_ids), Trip.start_date <= end, Trip.end_date >= start)
-            .order_by(Trip.start_date, Trip.id)
+        parts: list[dict[str, Any]] = item.get("segments") or [item]
+        moments = [
+            moment
+            for part in parts
+            for key in ("start_local", "end_local")
+            if (moment := _as_datetime(part.get(key))) is not None
+        ]
+        if not moments:
+            continue
+        departs = _as_datetime(parts[0].get("start_local")) or min(moments)
+        arrives = _as_datetime(parts[-1].get("end_local")) or max(moments)
+        stretches.append(
+            Stretch(starts_at=departs, ends_at=arrives, transit=item.get("kind") == "transit")
         )
-    )
+    return stretches
 
 
 def _roster(session: Session, trip: Trip) -> list[TripMember]:
@@ -165,16 +152,25 @@ def _passengers(
     return [sender] if sender is not None else []
 
 
-def _match_trip(
-    session: Session, receipt: Receipt, extraction: dict[str, Any]
-) -> tuple[Trip | None, list[Trip]]:
-    """The trip to place the booking in, else (None, candidates). One
-    overlapping trip is it. Among several, it's the only one where the booking
-    is for someone besides the owner — being on all of them, the owner can't
-    tell them apart, but a fellow passenger who is on just one can."""
-    candidates = _candidate_trips(session, receipt.user_id, _booking_date_span(extraction))
+def _match_trip(session: Session, receipt: Receipt, extraction: dict[str, Any]) -> Trip | None:
+    """The member-trip the booking belongs to (see app.services.trip_matching).
+    Among several that match equally, it's the only one where the booking is
+    for someone besides the owner: being on all of them, the owner can't tell
+    them apart, but a fellow passenger who is on just one can. Failing that,
+    the oldest."""
+    stretches = _booking_stretches(extraction)
+    if not stretches:
+        return None
+    first, last = search_window(stretches)
+    member_trip_ids = select(TripMember.trip_id).where(TripMember.user_id == receipt.user_id)
+    nearby = session.scalars(
+        select(Trip).where(
+            Trip.id.in_(member_trip_ids), Trip.start_date <= last, Trip.end_date >= first
+        )
+    )
+    candidates = matching_trips(nearby, stretches)
     if len(candidates) <= 1:
-        return (candidates[0] if candidates else None), candidates
+        return candidates[0] if candidates else None
     chain = _sender_chain(receipt, extraction)
     told_apart = [
         trip
@@ -185,7 +181,7 @@ def _match_trip(
             for member in _passengers(_roster(session, trip), item, chain)
         )
     ]
-    return (told_apart[0] if len(told_apart) == 1 else None), candidates
+    return told_apart[0] if len(told_apart) == 1 else candidates[0]
 
 
 def _ends(
@@ -366,10 +362,9 @@ def import_receipt(session: Session, receipt: Receipt) -> ImportOutcome:
         return ImportOutcome(receipt, "skipped")
 
     extraction = receipt.extracted or {}
-    trip, candidates = _match_trip(session, receipt, extraction)
+    trip = _match_trip(session, receipt, extraction)
     if trip is None:
-        outcome: Outcome = "ambiguous" if candidates else "no_match"
-        return ImportOutcome(receipt, outcome, candidate_trip_ids=[t.id for t in candidates])
+        return ImportOutcome(receipt, "no_match")
 
     # TODO(monetization): refuse placing into a locked/unpaid trip here — a trip
     # the user hasn't paid for should block this step. See [[monetization-model]].
