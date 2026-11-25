@@ -143,8 +143,98 @@ Fast-forwards the checkout to `origin/main`, rebuilds the image, runs
 `bootstrap.py` with the new image (new migrations and seed additions; it never
 edits or removes rows), then recreates the API container. It is idempotent, and
 re-running it after a failure is always the right move. Postgres is not
-restarted by a deploy. Nothing in it assumes a human is watching, so a GitHub
-Actions job can later run it over ssh unchanged.
+restarted by a deploy.
+
+When the new code has migrations to apply, it first dumps the database to
+`backups/<time>-before-<commit>.dump` (the last five are kept; see
+[Rolling back](#rolling-back)). If a migration fails, the old API keeps
+serving and the schema is as it was: Alembic applies all pending migrations in
+one transaction.
+
+You rarely run it by hand: every merge to `main` runs it, as below.
+
+### Automatic deploys
+
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) runs the tests
+on every pull request and every push to `main`. On `main`, once they pass, it
+sshes to the server and runs `deploy/deploy.sh`. Deploys run one at a time; a
+merge that lands mid-deploy waits for it. **Run workflow** in the Actions tab
+redeploys without a new commit.
+
+The tests run against a fresh Postgres with the real migrations, and the job
+also fails if Alembic has more than one head (two branches that each added a
+migration), so a broken migration stops in CI rather than on the server.
+
+One-time setup on the server, as the user that owns the checkout (it must be
+in the `docker` group). Generate a key used for nothing else, and allow it to
+run only `deploy.sh`:
+
+```bash
+ssh-keygen -t ed25519 -N '' -C 'github-actions wravel-server' -f ~/deploy_key
+echo "command=\"/srv/apps/wravel-server/deploy/deploy.sh\",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty $(cat ~/deploy_key.pub)" >> ~/.ssh/authorized_keys
+cat ~/deploy_key               # paste into DEPLOY_SSH_KEY_PROD, then:
+rm ~/deploy_key ~/deploy_key.pub
+ssh-keyscan -t ed25519 <server-host>   # from your machine: DEPLOY_KNOWN_HOSTS_PROD
+```
+
+A forced command applies to one key, so this is a different key from
+wravel-manage's even on a shared host. The checkout's `git pull` runs as that
+user, so it needs read access to the repository without a prompt (a read-only
+deploy key on GitHub if the repository is private).
+
+Repository secrets (Settings, Secrets and variables, Actions):
+
+| Secret | Value |
+|---|---|
+| `DEPLOY_SSH_KEY_PROD` | The private key above |
+| `DEPLOY_KNOWN_HOSTS_PROD` | The `ssh-keyscan` line, so CI refuses any other host key |
+| `DEPLOY_HOST_PROD` | The server's hostname or IP |
+| `DEPLOY_USER_PROD` | The user whose `authorized_keys` holds the key |
+
+### Writing migrations for automatic deploys
+
+Migrations run while the old API is still serving, and the old API keeps
+serving if the new one then fails its health check. So each migration has to
+work with the code before it as well as after:
+
+- **Add before you use; stop using before you drop.** A new column is nullable
+  or has a server default. Renaming or dropping a column or table takes two
+  merges: the first stops the code using it, the second drops it.
+- **Backfills belong in the migration**, written in SQL against the tables, not
+  through `app.models` (which follow the newest code, not the schema at that
+  revision).
+- **Mind locks on big tables.** The whole upgrade is one transaction, so an
+  `ALTER` that rewrites a large table blocks requests until it finishes.
+  `CREATE INDEX CONCURRENTLY` cannot run in a transaction; it needs its own
+  `autocommit_block()`.
+- Every migration gets a working `downgrade()`, but the dump is the real
+  safety net: a downgrade cannot bring back a dropped column's data.
+
+### Rolling back
+
+Roll back by merging to `main`, never by checking out an older commit on the
+server: `deploy.sh`'s `git pull --ff-only` then stops.
+
+- **No migration in the bad change:** revert the merge on GitHub and merge the
+  revert. It deploys like any other change.
+- **A migration that is fine, code that is not:** revert the code but keep the
+  migration file. A revert that removes it leaves the database at a revision
+  the code no longer has, and every deploy after that fails ("Can't locate
+  revision").
+- **A migration that damaged data:** restore the dump taken just before it,
+  then deploy a full revert (the migration file included, since the restored
+  database no longer has that revision):
+
+```bash
+cd /srv/apps/wravel-server
+docker compose stop app
+docker compose exec -T db dropdb -U wravel --force wravel
+docker compose exec -T db createdb -U wravel wravel
+docker compose exec -T db pg_restore -U wravel -d wravel --no-owner < backups/<time>-before-<commit>.dump
+deploy/deploy.sh               # once the revert is merged; it starts the API again
+```
+
+Anything written between the dump and the restore is lost.
 
 ### The server's `.env`
 
@@ -234,8 +324,10 @@ from both machines afterwards: it holds every user's data.
 
 ### Backups
 
-Nothing backs the database up yet. A `pg_dump` like the one above on a timer,
-copied off the server, is enough. Until then, take one before risky deploys.
+`deploy.sh` dumps the database to `backups/` before every deploy that migrates
+it, but those dumps live on the same disk as the database. Nothing takes
+regular backups or copies them off the server yet; a `pg_dump` like the one
+above on a timer, copied elsewhere, is enough.
 
 ### What is and is not seeded
 
