@@ -20,6 +20,12 @@ if ! grep -q '^COMPOSE_PROFILES=server' .env; then
     exit 1
 fi
 
+# The app refuses to start without it; say so here rather than mid-deploy.
+if ! grep -q '^TRIP_INBOXES=.' .env; then
+    echo ".env in $PWD has no TRIP_INBOXES -- re-run deploy/newenv.sh <staging|prod> --force" >&2
+    exit 1
+fi
+
 # --ff-only: the server checkout is not a place to make edits, and if it has
 # diverged from origin this stops rather than quietly merging.
 git pull --ff-only --quiet

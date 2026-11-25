@@ -9,7 +9,7 @@ def _email(email_id: str, sender: str, **extra) -> dict:
     return {
         "id": email_id,
         "from": sender,
-        "to": ["trips@inbound.wravel.example"],
+        "to": ["trips@wravel.app"],
         "subject": "Your flight to Tokyo is booked",
         "message_id": f"<{email_id}@airline.example>",
         "created_at": "2026-10-19T12:00:00.000Z",
@@ -112,3 +112,20 @@ def test_extract_sender_email_variants():
     assert extract_sender_email("PLAIN@Example.COM") == "plain@example.com"
     assert extract_sender_email(None) is None
     assert extract_sender_email("not-an-address") is None
+
+
+def test_pull_passes_over_mail_for_another_inbox(client, admin, resend, mail_extractor, session):
+    resend.received = [
+        _email("re_ours", "sun@example.com"),
+        _email("re_dev", "sun@example.com", to=["trips@dev.wravel.app"]),
+    ]
+    listed = client.post("/admin/received/mail", headers=admin).json()
+    assert [r["resend_email_id"] for r in listed] == ["re_ours"]
+    assert client.post("/admin/received/mail/process", headers=admin).status_code == 200
+    assert _receipt(session, "re_dev") is None and _count(session) == 1
+
+
+def test_retrieving_one_by_id_stores_it_whatever_its_address(client, admin, resend, session):
+    resend.received = [_email("re_dev", "sun@example.com", to=["trips@dev.wravel.app"])]
+    assert client.post("/admin/received/mail/re_dev", headers=admin).status_code == 200
+    assert _receipt(session, "re_dev") is not None

@@ -71,7 +71,8 @@ def retrieve_recent(
 ) -> list[EmailReceipt]:
     """Retrieve a page of recent received emails and store each (metadata only;
     the list carries no body). Newest first. `limit` bounds the page; `before`/
-    `after` page further back by email id (Resend has no time filter)."""
+    `after` page further back by email id (Resend has no time filter). Mail not
+    sent to the trips inbox is passed over, as the webhook does."""
     listing = _resend(lambda: resend.list_received_emails(limit=limit, before=before, after=after))
     receipts = store_received_list(session, listing.get("data") or [])
     session.commit()
@@ -194,7 +195,8 @@ def process_new_mail(
     matches the retrieve route (`limit` bounds the page; `before`/`after` page
     further back by email id — Resend has no time filter). Returns one outcome per
     receipt processed in this pass. Idempotent: mail already seen and finished is
-    skipped, so re-running is safe. This is an admin/manual path — the primary mail
+    skipped, so re-running is safe. Mail not sent to the trips inbox is passed
+    over, as the webhook does. This is an admin/manual path — the primary mail
     ingress will be webhooks."""
     listing = _resend(lambda: resend.list_received_emails(limit=limit, before=before, after=after))
     receipts = store_received_list(session, listing.get("data") or [])
@@ -216,7 +218,8 @@ def process_new_mail(
 def retrieve_one(
     email_id: str, session: SessionDep, resend: ResendDep
 ) -> EmailReceipt:
-    """Retrieve one received email by id and store it, body and all (in `raw`)."""
+    """Retrieve one received email by id and store it, body and all (in `raw`).
+    Asked for by id, it is stored whatever address it was sent to."""
     email = _resend(lambda: resend.get_received_email(email_id))
     receipt = store_received_email(session, email)
     if receipt is None:

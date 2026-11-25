@@ -40,7 +40,7 @@ def _upload_stay(client, headers, image_extractor):
 
 def _email_stay(client, admin, resend, mail_extractor, html="<p>Your stay</p>", text="Your stay"):
     resend.received = [{
-        "id": "re_1", "from": "sun@example.com", "subject": "Booking",
+        "id": "re_1", "from": "sun@example.com", "to": ["trips@wravel.app"], "subject": "Booking",
         "message_id": "<re_1@x>", "created_at": "2026-03-01T12:00:00.000Z",
         "text": text, "html": html,
     }]

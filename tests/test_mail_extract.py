@@ -16,7 +16,7 @@ def test_reference_date_line_carries_today_and_the_no_year_rule():
 def _email(email_id: str, sender: str, **extra) -> dict:
     return {
         "id": email_id,
-        "from": sender,
+        "from": sender, "to": ["trips@wravel.app"],
         "subject": "Your flight to Tokyo is booked",
         "message_id": f"<{email_id}@airline.example>",
         "created_at": "2026-10-19T12:00:00.000Z",

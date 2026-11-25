@@ -1,3 +1,4 @@
+import os
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
@@ -10,7 +11,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, make_url, text
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+# Settings are read when `app` is imported, and TRIP_INBOXES has no default.
+os.environ["TRIP_INBOXES"] = "trips@wravel.app,trip@wravel.app"
+
+from app.config import get_settings  # noqa: E402
 from app.api.deps import get_now
 from app.db import get_session
 from app.main import app
@@ -217,6 +221,13 @@ class PushRecorder:
     @property
     def ids(self) -> list[uuid.UUID]:
         return [i for batch in self.batches for i in batch]
+
+
+@pytest.fixture(autouse=True)
+def trip_inbox(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test starts out taking mail for production's inbox, whatever an
+    earlier test set."""
+    monkeypatch.setattr(get_settings(), "trip_inboxes", "trips@wravel.app,trip@wravel.app")
 
 
 @pytest.fixture(autouse=True)

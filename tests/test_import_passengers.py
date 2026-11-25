@@ -36,7 +36,7 @@ def _flight(*travelers: ExtractedTraveler, sender_emails=(), confirmation="ABC12
 def _forward(client, admin, resend, mail_extractor, sender, extraction, email_id="re_p1") -> dict:
     """`sender` forwards a booking; run it through extract and import."""
     resend.received = [{
-        "id": email_id, "from": sender.email, "subject": "Fwd: Booking",
+        "id": email_id, "from": sender.email, "to": ["trips@wravel.app"], "subject": "Fwd: Booking",
         "message_id": f"<{email_id}@x.example>", "created_at": "2026-03-01T12:00:00.000Z",
         "text": "booking details",
     }]

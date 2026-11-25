@@ -69,7 +69,7 @@ LODGING_ADDR = _lodging("H111", address="1-1 Chiyoda")  # with address
 
 def _email(email_id: str, sender: str) -> dict:
     return {
-        "id": email_id, "from": sender, "subject": "Booking",
+        "id": email_id, "from": sender, "to": ["trips@wravel.app"], "subject": "Booking",
         "message_id": f"<{email_id}@x.example>", "created_at": "2026-03-01T12:00:00.000Z",
         "text": "booking details", "html": "<p>booking</p>",
     }

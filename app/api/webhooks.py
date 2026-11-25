@@ -12,13 +12,12 @@ from app.db import SessionLocal
 from app.services import resend_webhook
 from app.services.mail_extraction import MailExtractor, get_mail_extractor
 from app.services.mail_ingest import SessionFactory, process_email_in_own_session
-from app.services.received_mail import store_received_webhook
+from app.services.received_mail import sent_to_trip_inbox, store_received_webhook
 from app.services.resend import ResendClient, get_resend_client
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 EMAIL_RECEIVED = "email.received"
-
 
 def get_resend_webhook_secret() -> str | None:
     return get_settings().resend_webhook_secret
@@ -58,7 +57,8 @@ def resend_webhook_event(
     stored as a receipt straight away, then, once this has answered, run through
     the same pipeline as `POST /admin/received/mail/process`: sender check,
     extraction, and import into the sender's matching trip. Any other event
-    type is acknowledged and ignored.
+    type is acknowledged and ignored, and so is an email that wasn't sent to
+    this server's trips inbox (the `TRIP_INBOXES` setting): it isn't stored.
 
     The call must carry Resend's (Svix) signature for `RESEND_WEBHOOK_SECRET`:
     401 without a valid one, 503 while no secret is configured. Resend retries
@@ -79,6 +79,9 @@ def resend_webhook_event(
     if not isinstance(event, dict) or event.get("type") != EMAIL_RECEIVED:
         return WebhookAck(status="ignored")
     data = event.get("data")
+    # A malformed event (no email id) is still refused below, wherever it was sent.
+    if isinstance(data, dict) and data.get("email_id") and not sent_to_trip_inbox(data):
+        return WebhookAck(status="ignored")
     receipt = store_received_webhook(session, data) if isinstance(data, dict) else None
     if receipt is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Event names no email")

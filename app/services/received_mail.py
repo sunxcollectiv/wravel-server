@@ -9,14 +9,44 @@ metadata only.
 """
 import uuid
 from datetime import UTC, datetime
+from email.utils import parseaddr
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import EmailReceipt, EmailReceiptStatus
 from app.services.mail_processing import InboundEmail
+
+
+def trip_inboxes() -> frozenset[str]:
+    """The addresses this server takes forwarded mail for (`TRIP_INBOXES`):
+    production's inbox on the production server, a dev one elsewhere. A Resend
+    account hands every environment the same mail, whatever address it was sent
+    to, so mail for another environment's inbox is left alone."""
+    configured = get_settings().trip_inboxes.split(",")
+    return frozenset(address.strip().lower() for address in configured if address.strip())
+
+
+def sent_to_trip_inbox(data: dict[str, Any]) -> bool:
+    """Whether an email (a webhook's `data` or a list/retrieve object) names
+    this server's trips inbox among its recipients: To, Cc or Bcc, each of
+    which may be `Name <addr>`."""
+    inboxes = trip_inboxes()
+    for field in ("to", "cc", "bcc"):
+        recipients = data.get(field)
+        if isinstance(recipients, str):
+            recipients = [recipients]
+        if not isinstance(recipients, list):
+            continue
+        for recipient in recipients:
+            if isinstance(recipient, str) and (
+                parseaddr(recipient)[1].strip().lower() in inboxes
+            ):
+                return True
+    return False
 
 
 def _upsert_received(
@@ -60,11 +90,12 @@ def store_received_email(session: Session, email: dict[str, Any]) -> EmailReceip
 
 
 def store_received_list(session: Session, emails: list[Any]) -> list[EmailReceipt]:
-    """Store a page of listed emails (metadata only — the list has no body)."""
+    """Store a page of listed emails (metadata only — the list has no body).
+    Ones not sent to the trips inbox are passed over, as the webhook does."""
     stored: list[EmailReceipt] = []
     seen: set[str] = set()
     for item in emails:
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or not sent_to_trip_inbox(item):
             continue
         inbound = InboundEmail.from_list_item(item)
         if inbound is None or inbound.email_id in seen:
