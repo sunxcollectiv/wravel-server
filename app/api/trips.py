@@ -83,6 +83,7 @@ def _new_member(session: SessionDep, trip: Trip, entry: TripMemberCreate) -> Tri
     """A member row for `entry`, linked to the account with that email if any."""
     member = TripMember(
         email=entry.email,
+        name=entry.name,
         role=entry.role,
         user_id=session.scalar(select(User.id).where(User.email == entry.email)),
     )
@@ -94,8 +95,9 @@ def _set_members(
     session: SessionDep, trip: Trip, entries: list[TripMemberCreate], *, replace: bool
 ) -> None:
     """Bring the roster in line with `entries`, matched by email: listed people
-    keep their row with the role given, new ones are added. With `replace`,
-    anyone not listed is removed. The owner is never removed or demoted."""
+    keep their row with the role given (and the name, when one is sent), new
+    ones are added. With `replace`, anyone not listed is removed. The owner is
+    never removed or demoted."""
     current = {member.email: member for member in trip.members}
     for entry in entries:
         member = current.get(entry.email)
@@ -105,6 +107,8 @@ def _set_members(
         if member.user_id == trip.owner_id and entry.role is not TripRole.ORGANIZER:
             raise HTTPException(status.HTTP_409_CONFLICT, "The owner is always an organizer")
         member.role = entry.role
+        if "name" in entry.model_fields_set:
+            member.name = entry.name
     if replace:
         listed = {entry.email for entry in entries}
         for member in list(trip.members):
