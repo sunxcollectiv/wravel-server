@@ -23,6 +23,7 @@ from app.services.extraction import (  # noqa: F401 — re-exported for callers/
     ExtractedPlace,
     ExtractedRoom,
     ExtractedSegment,
+    ExtractedTraveler,
     Extraction,
     ExtractionError,
     parse_extraction,
@@ -37,7 +38,12 @@ You extract structured travel-booking data from a single forwarded email.
 
 The email was forwarded by a traveler to a trip inbox, so the real confirmation \
 usually sits below forwarding headers and quoted text — read past them. Extract \
-only what the email actually states; never invent details."""
+only what the email actually states; never invent details.
+
+Whoever forwarded it is not necessarily who the booking is for: they may have \
+been sent it by someone else, or be forwarding it on another traveler's behalf. \
+Take the travelers from the confirmation itself, and report the chain of \
+senders separately (see "travelers" and "sender_emails" below)."""
 _SYSTEM_PROMPT = f"{_INTRO}\n\n{EXTRACTION_SCHEMA_PROMPT}"
 
 

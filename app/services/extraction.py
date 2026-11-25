@@ -93,6 +93,15 @@ class ExtractedLodging(BaseModel):
         return _count_or_none(value)
 
 
+class ExtractedTraveler(BaseModel):
+    """Someone a booking is for, as the booking itself names them: a passenger,
+    a guest, the person a reservation is under. Matched to a trip member at
+    import (see app.services.passengers), by email first and then by name."""
+
+    name: str | None = None
+    email: str | None = None
+
+
 class ExtractedItem(BaseModel):
     kind: Literal["lodging", "activity", "transit"]
     # Overall transport mode for a transit item (flight|train|bus|ferry|
@@ -109,6 +118,8 @@ class ExtractedItem(BaseModel):
     end_place: ExtractedPlace | None = None  # transit arrival
     segments: list[ExtractedSegment] = []  # transit legs; empty for other kinds
     lodging: ExtractedLodging | None = None  # stay details; null for other kinds
+    # Who this item is for, per the booking. Empty when it names nobody.
+    travelers: list[ExtractedTraveler] = []
 
 
 class Extraction(BaseModel):
@@ -118,6 +129,18 @@ class Extraction(BaseModel):
     confidence: float
     summary: str
     items: list[ExtractedItem] = []
+    # Email only: the address of everyone who sent or forwarded the message, as
+    # its quoted headers show, original sender first. The fallback for finding
+    # whose booking it is when the booking names nobody on the trip.
+    sender_emails: list[str] = []
+
+    @field_validator("sender_emails", mode="before")
+    @classmethod
+    def _addresses(cls, value: object) -> list[str]:
+        # A stray null or non-string entry shouldn't sink the whole extraction.
+        if not isinstance(value, list):
+            return []
+        return [entry for entry in value if isinstance(entry, str)]
 
 
 # The schema + rules half of the system prompt, shared verbatim by every source.
@@ -133,6 +156,7 @@ exactly this shape:
   "category": one of "flight" | "lodging" | "train" | "car_rental" | "restaurant" | "event" | "other" | "not_a_booking",
   "confidence": a number 0.0-1.0,
   "summary": "one short line describing the booking",
+  "sender_emails": [email address strings] (emails only; [] for anything else),
   "items": [
     {
       "kind": "lodging" | "activity" | "transit",
@@ -160,7 +184,8 @@ exactly this shape:
           {"label": str|null, "room_number": str|null, "room_type": str|null,
            "guests": int|null, "confirmation_number": str|null}
         ]
-      } (lodging only, else null)
+      } (lodging only, else null),
+      "travelers": [{"name": str|null, "email": str|null}]
     }
   ]
 }
@@ -196,6 +221,24 @@ something per room (its own type, guest count, room number or confirmation \
 number) — otherwise []. A room's confirmation_number is only for a room \
 confirmed separately from the stay's own; usually null. label = how the \
 booking names the room ("Room 1"), else null.
+- travelers: the people THIS item is booked for, as the booking itself names \
+them: a flight's or train's passengers, a stay's guests, the name a \
+reservation, rental or ticket is under. One entry per person. name = their \
+full name in natural order, given name(s) then family name ("CHEN/SUN MR" is \
+"Sun Chen"), without titles. email = that person's own address only when the \
+booking shows it next to them (the passenger's or guest's contact email), \
+else null. Take them ONLY from the booking's own content. Whoever sent, \
+forwarded or received the message is not a traveler for that reason alone, and \
+neither is anyone who merely appears around the booking: a chat contact or \
+message author, the name on a device's status bar or notification, an account \
+or profile shown in an app's chrome, a travel agent, host, driver or support \
+contact, or a signature. [] when the booking names nobody.
+- sender_emails: for an email, the From address of every message in the chain, \
+read from the quoted forwarding/reply headers in the body ("From: ...", in \
+whatever language), ordered from the ORIGINAL message to the most recent \
+forward. Include each hop's sender (the airline or hotel too); leave out To/Cc \
+recipients and addresses that only appear in the content or a signature. [] \
+when there are no such headers, and always [] for an image.
 - transit_mode: set each leg's mode, and the item's overall mode (the shared \
 value when every leg is the same). Most bookings are one mode (a flight's legs \
 are all flights); only a genuinely mixed booking (e.g. ferry + connecting bus) \
