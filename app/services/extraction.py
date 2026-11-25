@@ -225,9 +225,13 @@ booking names the room ("Room 1"), else null.
 them: a flight's or train's passengers, a stay's guests, the name a \
 reservation, rental or ticket is under. One entry per person. name = their \
 full name in natural order, given name(s) then family name ("CHEN/SUN MR" is \
-"Sun Chen"), without titles. email = that person's own address only when the \
-booking shows it next to them (the passenger's or guest's contact email), \
-else null. Take them ONLY from the booking's own content. Whoever sent, \
+"Sun Chen"), without titles. email = that person's own address when the \
+booking shows it: next to them (the passenger's or guest's contact email), or \
+as the address the provider's ORIGINAL confirmation was sent to ("To: ...", in \
+an email's quoted headers or visible in a screenshot of it) when that \
+confirmation is plainly theirs: it greets them by name, or they are the only \
+traveler. The To of a later forward is never theirs for that reason. Else \
+null. Take the people ONLY from the booking's own content. Whoever sent, \
 forwarded or received the message is not a traveler for that reason alone, and \
 neither is anyone who merely appears around the booking: a chat contact or \
 message author, the name on a device's status bar or notification, an account \
