@@ -7,7 +7,7 @@ Store environment a transaction comes from is read from the transaction, and
 then held to: it's checked by a verifier for that environment only, and an
 environment that isn't enabled (see Settings.storekit_*) is refused.
 
-Xcode transactions (the simulator against Outbound.storekit) are signed by
+Xcode transactions (the simulator against Wravel.storekit) are signed by
 Xcode, not Apple, so nothing about them can be verified; they're only for a
 local server.
 """
@@ -29,12 +29,12 @@ from app.config import get_settings
 ROOT_CERTIFICATE = Path(__file__).parent.parent / "certs" / "AppleRootCA-G3.cer"
 
 # The credits each product buys, in cents: one consumable per amount on
-# offer. Must match App Store Connect and the app's Outbound.storekit.
+# offer. Must match App Store Connect and the app's Wravel.storekit.
 PRODUCTS: dict[str, int] = {
-    "earth.outbound.credits.500": 500,
-    "earth.outbound.credits.1500": 1_500,
-    "earth.outbound.credits.2500": 2_500,
-    "earth.outbound.credits.5000": 5_000,
+    "app.wravel.credits.500": 500,
+    "app.wravel.credits.1500": 1_500,
+    "app.wravel.credits.2500": 2_500,
+    "app.wravel.credits.5000": 5_000,
 }
 
 

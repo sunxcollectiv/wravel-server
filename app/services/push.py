@@ -186,6 +186,17 @@ def deliver(session: Session, notification_ids: Iterable[uuid.UUID], client: Apn
                 accepted += 1
             elif response.token_is_dead:
                 dead.add(device.id)
+            elif response.reason == "DeviceTokenNotForTopic":
+                # The token is fine, but it belongs to another bundle id than
+                # apns_topic: the server is configured for the wrong app (or the
+                # device registered from an old build). Every push to it fails.
+                logger.error(
+                    "APNs refused notification %s for device %s: DeviceTokenNotForTopic. "
+                    "APNS_TOPIC is %r; the token is for another bundle id",
+                    notification.id,
+                    device.id,
+                    client.topic,
+                )
             else:
                 logger.warning(
                     "APNs refused notification %s for device %s: %s %s",
