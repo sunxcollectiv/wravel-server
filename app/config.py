@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     apns_private_key: str | None = None
     apns_key_path: str | None = None
     # The app's bundle id.
-    apns_topic: str = "earth.outbound"
+    apns_topic: str = "app.wravel"
     # Debug builds (Xcode, the simulator) get sandbox tokens; TestFlight and
     # App Store builds get production ones. Each only works on its own host.
     apns_use_sandbox: bool = True
@@ -63,9 +63,9 @@ class Settings(BaseSettings):
     # sandbox accounts against the production server. Production purchases
     # need the app's numeric App Store id (App Store Connect, App Information,
     # Apple ID) and are refused until it's set. Purchases in Xcode (the
-    # simulator, against Outbound.storekit) aren't signed by Apple at all, so
+    # simulator, against Wravel.storekit) aren't signed by Apple at all, so
     # anyone could forge one: only allow them on a local server.
-    storekit_bundle_id: str = "earth.outbound"
+    storekit_bundle_id: str = "app.wravel"
     storekit_app_apple_id: int | None = None
     storekit_allow_sandbox: bool = True
     storekit_allow_xcode: bool = False

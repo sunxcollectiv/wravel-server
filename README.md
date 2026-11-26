@@ -359,8 +359,10 @@ switched off.
 | `RESEND_API_KEY` | Retrieving forwarded travel-confirmation emails |
 | `RESEND_WEBHOOK_SECRET` | Accepting Resend's `email.received` webhook at `POST /webhooks/resend` (the webhook's signing secret, `whsec_...`). Without it the route answers 503 |
 | `TRIP_INBOXES` | The inbox addresses this server takes forwarded mail for, comma-separated; mail sent anywhere else is skipped. Required, with no default anywhere: the server does not start without it, and `newenv.sh` asks for it and writes nothing if it gets none. For example `trips@wravel.app,trip@wravel.app` in production and `trips@dev.wravel.app,trip@dev.wravel.app` on a dev server |
-| `APNS_KEY_ID`, `APNS_TEAM_ID`, and `APNS_PRIVATE_KEY` or `APNS_KEY_PATH` | Push notifications. Without a key, pushes are skipped |
+| `APNS_KEY_ID`, `APNS_TEAM_ID`, and `APNS_PRIVATE_KEY` or `APNS_KEY_PATH` | Push notifications. Without a key, pushes are skipped. `APNS_TEAM_ID` must be `D5AQ745Q3D`, and the `.p8` key must be one created in that team |
+| `APNS_TOPIC` | The app's bundle id, `app.wravel` (the default). Leave it unset. If it doesn't match the app, Apple refuses every push with `400 DeviceTokenNotForTopic`, which is logged as an error. The token is fine, so it is kept |
 | `APNS_USE_SANDBOX` | `true` (default) for Xcode builds; `false` for TestFlight and App Store builds |
+| `STOREKIT_BUNDLE_ID` | The bundle id purchases must be for, `app.wravel` (the default). Leave it unset. The credit products are `app.wravel.credits.{500,1500,2500,5000}` (`app/services/storekit.py`), matching App Store Connect and the app's `Wravel.storekit` |
 | `STOREKIT_APP_APPLE_ID` | Required to accept production in-app purchases |
 | `STOREKIT_ALLOW_XCODE` | Accept unsigned Xcode purchases. Local servers only |
 

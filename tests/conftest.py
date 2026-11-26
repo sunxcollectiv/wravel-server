@@ -244,7 +244,7 @@ class FakeApns(ApnsClient):
     there to make the send fail outright."""
 
     def __init__(self) -> None:
-        self.topic = "earth.outbound"
+        self.topic = "app.wravel"
         self.sent: list[tuple[str, dict[str, Any], str | None]] = []
         self.responses: dict[str, ApnsResponse | Exception] = {}
 

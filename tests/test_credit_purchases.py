@@ -1,6 +1,6 @@
 """Buying credits in the app: POST /credits/purchases with a StoreKit 2
 signed transaction. Transactions here come from the Xcode environment (the
-simulator against Outbound.storekit), which Xcode signs itself, so they can
+simulator against Wravel.storekit), which Xcode signs itself, so they can
 be built in a test; anything claiming to be from Apple must verify."""
 
 
@@ -18,8 +18,8 @@ def _transaction(environment="Xcode", **fields):
     payload = {
         "transactionId": "0",
         "originalTransactionId": "0",
-        "bundleId": "earth.outbound",
-        "productId": "earth.outbound.credits.1500",
+        "bundleId": "app.wravel",
+        "productId": "app.wravel.credits.1500",
         "purchaseDate": PURCHASED_AT,
         "originalPurchaseDate": PURCHASED_AT,
         "quantity": 1,
@@ -36,7 +36,7 @@ def _transaction(environment="Xcode", **fields):
 @pytest.fixture
 def storekit(client):
     """The verifier a local server runs with: Xcode purchases allowed."""
-    verifier = StoreKitVerifier.for_environments(bundle_id="earth.outbound", allow_xcode=True)
+    verifier = StoreKitVerifier.for_environments(bundle_id="app.wravel", allow_xcode=True)
     app.dependency_overrides[get_storekit_verifier] = lambda: verifier
     return verifier
 
@@ -67,7 +67,7 @@ def test_a_purchase_is_credited_once(client, make_user, storekit, credits_of):
 
 def test_quantity_multiplies(client, make_user, storekit):
     sun = make_user("sun", credits=0)
-    resp = _buy(client, sun, _transaction(productId="earth.outbound.credits.500", quantity=3))
+    resp = _buy(client, sun, _transaction(productId="app.wravel.credits.500", quantity=3))
     assert resp.status_code == 201
     assert resp.json()["balance_cents"] == 1500
 
@@ -100,7 +100,7 @@ def test_xcode_transaction_ids_restart(client, make_user, storekit, credits_of):
 @pytest.mark.parametrize(
     ("signed", "detail"),
     [
-        (_transaction(productId="earth.outbound.premium"), "Not a credits product"),
+        (_transaction(productId="app.wravel.premium"), "Not a credits product"),
         (_transaction(type="Non-Consumable"), "Not a credits product"),
         (_transaction(revocationDate=PURCHASED_AT + 1), "refunded or revoked"),
         (_transaction(bundleId="com.someone.else"), "couldn't verify"),
@@ -126,7 +126,7 @@ def test_xcode_purchases_are_refused_unless_allowed(client, make_user):
     nothing about it can be verified."""
     sun = make_user("sun", credits=0)
     app.dependency_overrides[get_storekit_verifier] = lambda: StoreKitVerifier.for_environments(
-        bundle_id="earth.outbound"
+        bundle_id="app.wravel"
     )
     resp = _buy(client, sun, _transaction())
     assert resp.status_code == 422

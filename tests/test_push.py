@@ -212,6 +212,24 @@ def test_dead_tokens_are_forgotten_and_failures_dont_raise(client, session, push
     assert [token for token, _, _ in apns.sent].count("gone") == 1
 
 
+def test_a_token_for_another_app_is_kept_and_logged_as_an_error(
+    client, session, pushes, apns, sun, caplog
+):
+    # The symptom of APNS_TOPIC not matching the app's bundle id: the token is
+    # fine, so it's kept, but it's worth more than a warning.
+    _device(client, sun, "other-app")
+    apns.responses = {"other-app": ApnsResponse(400, "DeviceTokenNotForTopic")}
+    _notify(session, sun)
+    session.commit()
+
+    with caplog.at_level("ERROR", logger=push.logger.name):
+        assert deliver(session, pushes.ids, apns) == 0
+    assert {d.token for d in session.query(PushDevice)} == {"other-app"}
+    [record] = [r for r in caplog.records if "DeviceTokenNotForTopic" in r.getMessage()]
+    assert record.levelname == "ERROR"
+    assert "'app.wravel'" in record.getMessage()
+
+
 def test_without_apns_configured_nothing_is_sent(monkeypatch):
     submitted = []
     monkeypatch.setattr(push, "get_apns_client", lambda: None)
@@ -240,7 +258,7 @@ def _client(pem, handler) -> ApnsClient:
         base_url="https://api.sandbox.push.apple.com", transport=httpx.MockTransport(handler)
     )
     return ApnsClient(
-        key_id="KEY123", team_id="TEAM456", private_key=pem, topic="earth.outbound", http=http
+        key_id="KEY123", team_id="TEAM456", private_key=pem, topic="app.wravel", http=http
     )
 
 
@@ -258,7 +276,7 @@ def test_client_signs_and_addresses_the_request(p8):
 
     [request] = seen
     assert request.url.path == "/3/device/abc123"
-    assert request.headers["apns-topic"] == "earth.outbound"
+    assert request.headers["apns-topic"] == "app.wravel"
     assert request.headers["apns-push-type"] == "alert"
     assert request.headers["apns-priority"] == "10"
     assert request.headers["apns-collapse-id"] == "k"
